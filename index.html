@@ -159,8 +159,9 @@ textarea.in{min-height:110px;padding:12px;font-size:13px}
   <section id="v-saldos" hidden><h2>Quién va a favor y quién debe</h2><div class="bal" id="bal"></div><p class="note">Saldo = lo que ha pagado cada uno menos lo que le corresponde.</p></section>
   <section id="v-liquidar" hidden><div id="settle"></div></section>
   <section id="v-rondas" hidden>
+    <div class="seg" id="rmode" style="margin:0 0 16px"><button data-rm="comida">Comida</button><button data-rm="poteo">Poteo</button></div>
     <h2>¿A quién le toca hoy?</h2>
-    <p class="hint" style="color:var(--mut);margin:0 0 10px">Marca quién ha venido hoy. La app reparte los turnos de forma justa: quien más días viene, más veces paga.</p>
+    <p class="hint" style="color:var(--mut);margin:0 0 10px" id="rintro"></p>
     <div class="pres" id="pres"></div>
     <div id="turns"></div>
     <h2 style="margin-top:26px">Cómo vamos</h2>
@@ -294,8 +295,11 @@ function nextUp(g,type,present,exclude){const st=rstats(g,type);let c=present.fi
   return c.sort((a,b)=>(st[b].fair-st[b].paid)-(st[a].fair-st[a].paid)||st[a].last.localeCompare(st[b].last)||st[a].paid-st[b].paid)[0]}
 function renderRounds(g){
   g.rounds=g.rounds||[];const ids=g.members.map(m=>m.id);
-  g.present=(g.present||ids).filter(id=>ids.includes(id));const pr=g.present,t=today();
+  g.present=(g.present||ids).filter(id=>ids.includes(id));const pr=g.present,t=today(),mode=g.rmode||'comida';
+  document.querySelectorAll('#rmode button').forEach(b=>b.setAttribute('aria-pressed',b.dataset.rm===mode));
+  $('#rintro').textContent=mode==='poteo'?'Marca quién está en el poteo. Cada vez que paguéis una ronda, apúntala y la app dice a quién le toca en el siguiente bar.':'Marca quién ha venido hoy. La app reparte los turnos de forma justa: quien más días viene, más veces paga.';
   $('#pres').innerHTML=g.members.map(m=>`<button data-p="${m.id}" aria-pressed="${pr.includes(m.id)}">${av(g,m.id)}${esc(m.name)}</button>`).join('')||'<div class="empty">Añade personas en «Grupo».</div>';
+  if(mode==='poteo'){renderPoteo(g,pr,t);return}
   const todayR=g.rounds.filter(r=>r.date===t);let h='',sugs=[];
   TYPES.forEach(([type,label,art])=>{const done=todayR.find(r=>r.type===type);
     if(done){h+=`<div class="turn paid"><small>${label}</small>${av(g,done.who)}<div class="who2">Hoy pagó ${esc(mem(g,done.who).name)}<span>${done.present.length} personas</span></div><div class="acts"><button class="sec" data-ru="${done.id}">Corregir</button></div></div>`;return}
@@ -312,7 +316,23 @@ function renderRounds(g){
     return`<div class="row" style="cursor:default"><span class="t"><b>${new Date(d+'T12:00').toLocaleDateString('es-ES',{weekday:'long',day:'numeric',month:'short'})}</b><span class="s">${rs.map(r=>`${TNAME[r.type]||r.type}: ${esc(mem(g,r.who).name)}`).join(' · ')} · ${rs[0].present.length} personas</span></span></div>`}).join('')||'<div class="empty">Aún no hay turnos apuntados.</div>';
   $('#rtab').insertAdjacentHTML('afterend','');
 }
+function renderPoteo(g,pr,t){
+  const tr=g.rounds.filter(r=>r.type==='poteo'&&r.date===t),last=tr[tr.length-1];let h='';
+  if(pr.length<2)h=`<div class="turn"><small>Siguiente ronda</small><div class="who2" style="grid-column:1/-1;font-size:18px">Marca al menos a dos personas</div></div>`;
+  else{const n=nextUp(g,'poteo',[...pr],last?[last.who]:[]);
+    h=`<div class="turn"><small>Ronda nº ${tr.length+1} de hoy</small>${av(g,n)}<div class="who2">Le toca a ${esc(mem(g,n).name)}<span>${tr.length?'Es quien menos ha pagado contando lo que viene':'Primer bar: empieza quien menos ha pagado'}</span></div>
+      <div class="acts"><button class="pri" data-rp="poteo|${n}">Ha pagado ${esc(mem(g,n).name)}</button><select class="in" data-ro="poteo" aria-label="Ha pagado otra persona"><option value="">Pagó otro…</option>${pr.filter(id=>id!==n).map(id=>`<option value="${id}">${esc(mem(g,id).name)}</option>`).join('')}</select></div></div>`}
+  if(tr.length)h+=`<div class="turn paid"><small>Hoy llevamos ${tr.length} ${tr.length===1?'ronda':'rondas'}</small><div style="grid-column:1/-1">${tr.map((r,i)=>`${i+1}. ${esc(mem(g,r.who).name)}`).join(' · ')}</div><div class="acts"><button class="sec" data-ru="${last.id}">Deshacer la última</button></div></div>`;
+  $('#turns').innerHTML=h;
+  const st=rstats(g,'poteo');
+  $('#rtab').innerHTML=`<tr><th>Persona</th><th>Pagadas</th><th>Rondas con él</th><th>Balance</th></tr>`+g.members.map(m=>{const x=st[m.id],bal=x.paid-x.fair;
+    return`<tr><td>${esc(m.name)}</td><td>${x.paid}</td><td>${x.days}</td><td style="color:${bal>0.25?'var(--pos)':bal<-0.25?'var(--neg)':'var(--mut)'}">${bal>0.25?'+':''}${bal.toFixed(1).replace('.',',')}</td></tr>`}).join('');
+  const days=[...new Set(g.rounds.filter(r=>r.type==='poteo').map(r=>r.date))].sort().reverse().slice(0,10);
+  $('#rhist').innerHTML=days.map(d=>{const rs=g.rounds.filter(r=>r.type==='poteo'&&r.date===d);
+    return`<div class="row" style="cursor:default"><span class="t"><b>${new Date(d+'T12:00').toLocaleDateString('es-ES',{weekday:'long',day:'numeric',month:'short'})} · ${rs.length} ${rs.length===1?'ronda':'rondas'}</b><span class="s">${rs.map(r=>esc(mem(g,r.who).name)).join(' → ')}</span></span></div>`}).join('')||'<div class="empty">Aún no hay rondas de poteo.</div>';
+}
 $('#v-rondas').addEventListener('click',e=>{const g=G();
+  const rm=e.target.closest('[data-rm]');if(rm){g.rmode=rm.dataset.rm;render();return}
   const p=e.target.closest('[data-p]');if(p){const id=p.dataset.p;g.present=g.present.includes(id)?g.present.filter(x=>x!==id):[...g.present,id];render();return}
   const b=e.target.closest('[data-rp]');if(b){const[type,who]=b.dataset.rp.split('|');g.rounds.push({id:uid(),type,who,date:today(),present:[...g.present]});render();return}
   const u=e.target.closest('[data-ru]');if(u){snapshot('Turno borrado');g.rounds=g.rounds.filter(r=>r.id!==u.dataset.ru);render()}});
@@ -413,7 +433,7 @@ const HELP=[
  ['Apunta cada gasto','Pulsa «+ Añadir gasto». Escanea el ticket o escribe el importe, elige el concepto con un toque, quién pagó y entre quiénes se reparte.'],
  ['Elige cómo repartir','«A partes iguales» divide entre los marcados (los céntimos sueltos se reparten solos). «Importes exactos» te deja poner la parte de cada uno; la app avisa si falta o sobra.'],
  ['Mira los saldos','En «Saldos», verde es quien ha puesto de más y le deben; rojo es quien debe. Saldo = lo que pagó menos lo que le toca.'],
- ['Rondas del día','Para la ronda antes de comer, los cafés y las copas, que van aparte. Marca quién ha venido hoy y la app dice a quién le toca cada cosa; si hay gente suficiente, nadie paga dos cosas el mismo día. Las copas solo se apuntan los días que las hay. Es justo con la asistencia: quien viene más días paga más veces. «Balance» en positivo es quien ha pagado de más.'],
+ ['Rondas del día','Para la ronda antes de comer, los cafés y las copas, que van aparte. Marca quién ha venido hoy y la app dice a quién le toca cada cosa; si hay gente suficiente, nadie paga dos cosas el mismo día. Las copas solo se apuntan los días que las hay. En modo «Poteo» se apuntan todas las rondas que hagáis, una por bar, y siempre te dice a quién le toca la siguiente. Es justo con la asistencia: quien viene más días paga más veces. «Balance» en positivo es quien ha pagado de más.'],
  ['Liquida con los mínimos pagos','«Liquidar» calcula quién paga a quién con el menor número de transferencias. Cuando se haga un pago, pulsa «Hecho»: queda apuntado como reembolso y todo se recalcula.']];
 function helpSheet(){open(head('Cómo funciona')+HELP.map((h,i)=>`<div class="hs"><span class="n">${i+1}</span><h3>${h[0]}</h3><p>${h[1]}</p></div>`).join('')+`
   <div class="tip"><b>Escanear ticket</b>La foto se lee en tu propio móvil, no se envía a ningún sitio. La primera vez tarda un poco más porque descarga el lector. Revisa siempre el importe antes de guardar: un ticket arrugado o con poca luz puede leerse mal.</div>
