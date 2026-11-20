@@ -290,12 +290,12 @@ function renderRounds(g){
   g.rounds=g.rounds||[];const ids=g.members.map(m=>m.id);
   g.present=(g.present||ids).filter(id=>ids.includes(id));const pr=g.present,t=today();
   $('#pres').innerHTML=g.members.map(m=>`<button data-p="${m.id}" aria-pressed="${pr.includes(m.id)}">${av(g,m.id)}${esc(m.name)}</button>`).join('')||'<div class="empty">Añade personas en «Grupo».</div>';
-  const todayR=g.rounds.filter(r=>r.date===t);let h='';
+  const todayR=g.rounds.filter(r=>r.date===t);let h='',sug=null;
   TYPES.forEach(([type,label,art])=>{const done=todayR.find(r=>r.type===type);
     if(done){h+=`<div class="turn paid"><small>${label}</small>${av(g,done.who)}<div class="who2">Hoy pagó ${esc(mem(g,done.who).name)}<span>${done.present.length} personas</span></div><div class="acts"><button class="sec" data-ru="${done.id}">Corregir</button></div></div>`;return}
     if(pr.length<2){h+=`<div class="turn"><small>${label}</small><div class="who2" style="grid-column:1/-1;font-size:18px">Marca al menos a dos personas</div></div>`;return}
-    const other=todayR.filter(r=>r.type!==type).map(r=>r.who),n=nextUp(g,type,[...pr],other);
-    h+=`<div class="turn"><small>${label}</small>${av(g,n)}<div class="who2">Le toca a ${esc(mem(g,n).name)}<span>${other.length&&other[0]!==n?'Quien pagó la otra hoy queda fuera':'Es quien menos ha pagado para lo que viene'}</span></div>
+    const other=todayR.filter(r=>r.type!==type).map(r=>r.who);if(!other.length&&sug)other.push(sug);const n=nextUp(g,type,[...pr],other);sug=n;
+    h+=`<div class="turn"><small>${label}</small>${av(g,n)}<div class="who2">Le toca a ${esc(mem(g,n).name)}<span>${type==='cafe'&&other.length?'Así no paga el mismo la ronda y los cafés':'Es quien menos ha pagado para lo que viene'}</span></div>
       <div class="acts"><button class="pri" data-rp="${type}|${n}">Ha pagado ${esc(mem(g,n).name)}</button><select class="in" data-ro="${type}" aria-label="Ha pagado otra persona"><option value="">Pagó otro…</option>${pr.filter(id=>id!==n).map(id=>`<option value="${id}">${esc(mem(g,id).name)}</option>`).join('')}</select></div></div>`});
   $('#turns').innerHTML=h;
   const s1=rstats(g,'ronda'),s2=rstats(g,'cafe');
