@@ -114,6 +114,25 @@ textarea.in{min-height:110px;padding:12px;font-size:13px}
 .hs p{margin:0 0 6px;color:var(--mut);font-size:15px}
 .tip{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 14px;margin-top:16px;font-size:15px}
 .tip b{display:block;margin-bottom:2px}
+.pres{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}
+.pres button{display:flex;align-items:center;gap:8px;min-height:44px;padding:0 14px 0 5px;border-radius:22px;border:2px solid var(--line);background:var(--card);font-weight:600;opacity:.5}
+.pres button[aria-pressed=true]{opacity:1;border-color:var(--ink)}
+.pres .av{width:30px;height:30px}
+.turn{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:16px;margin-bottom:12px;display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px 14px;align-items:center}
+.turn>small{grid-column:1/-1;color:var(--mut);font-weight:600;font-size:14px}
+.turn .av{width:54px;height:54px;font-size:22px;grid-row:span 1}
+.turn .who2{font:800 26px/1.1 Sora,sans-serif}
+.turn .who2 span{display:block;font:500 14px Inter,sans-serif;color:var(--mut)}
+.turn .acts{grid-column:1/-1;display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.turn .acts .pri{min-height:48px;flex:1 1 160px}
+.turn .acts select{flex:1 1 140px;min-height:48px}
+.turn.paid{background:transparent;border-style:dashed}
+.rt{width:100%;border-collapse:collapse;background:var(--card);border-radius:14px;overflow:hidden}
+.rt th,.rt td{padding:10px 12px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+.rt th:first-child,.rt td:first-child{text-align:left}
+.rt th{font-size:13px;color:var(--mut);font-weight:600}
+.rt tr:last-child td{border:0}
+.scroll{overflow-x:auto}
 </style>
 </head>
 <body>
@@ -133,11 +152,22 @@ textarea.in{min-height:110px;padding:12px;font-size:13px}
   <button role="tab" data-t="gastos" aria-selected="true">Gastos</button>
   <button role="tab" data-t="saldos" aria-selected="false">Saldos</button>
   <button role="tab" data-t="liquidar" aria-selected="false">Liquidar</button>
+  <button role="tab" data-t="rondas" aria-selected="false">Rondas</button>
 </div></nav>
 <main class="wrap">
   <section id="v-gastos"><input class="search" id="q" type="search" placeholder="Buscar gasto…" aria-label="Buscar"><div id="list"></div></section>
   <section id="v-saldos" hidden><h2>Quién va a favor y quién debe</h2><div class="bal" id="bal"></div><p class="note">Saldo = lo que ha pagado cada uno menos lo que le corresponde.</p></section>
   <section id="v-liquidar" hidden><div id="settle"></div></section>
+  <section id="v-rondas" hidden>
+    <h2>¿A quién le toca hoy?</h2>
+    <p class="hint" style="color:var(--mut);margin:0 0 10px">Marca quién ha venido hoy. La app reparte los turnos de forma justa: quien más días viene, más veces paga.</p>
+    <div class="pres" id="pres"></div>
+    <div id="turns"></div>
+    <h2 style="margin-top:26px">Cómo vamos</h2>
+    <div class="scroll"><table class="rt" id="rtab"></table></div>
+    <h2 style="margin-top:26px">Últimos días</h2>
+    <div id="rhist"></div>
+  </section>
   <p class="note" id="demo">El grupo «Finde en Hondarribia» es un ejemplo: bórralo o crea el tuyo con «+ Nuevo». Los datos se guardan en este dispositivo; para pasarlos a otro móvil usa Grupo → Compartir.</p>
 </main>
 <button class="fab" id="fab">+ Añadir gasto</button>
@@ -154,7 +184,7 @@ const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'
 const fmt=new Intl.NumberFormat('es-ES',{style:'currency',currency:'EUR'});
 const eur=c=>fmt.format(c/100);
 const uid=()=>Math.random().toString(36).slice(2,9);
-const today=()=>new Date().toISOString().slice(0,10);
+const today=()=>{const d=new Date();return new Date(d-d.getTimezoneOffset()*6e4).toISOString().slice(0,10)};
 const toC=v=>Math.round(parseFloat(String(v).replace(',','.'))*100)||0;
 const KEY='cuentas-claras-v1';
 const QUICK=['Cena','Comida','Súper','Gasolina','Copas','Entradas','Alojamiento','Taxi'];
@@ -218,7 +248,9 @@ function render(){
   $('#chips').innerHTML=g.members.map(m=>av(g,m.id)).join('');
   $('#demo').hidden=!S.groups.some(x=>x.name==='Finde en Hondarribia');
   document.querySelectorAll('nav button').forEach(b=>b.setAttribute('aria-selected',b.dataset.t===tab));
-  ['gastos','saldos','liquidar'].forEach(t=>$('#v-'+t).hidden=t!==tab);
+  ['gastos','saldos','liquidar','rondas'].forEach(t=>$('#v-'+t).hidden=t!==tab);
+  $('#fab').hidden=tab==='rondas';
+  if(tab==='rondas')renderRounds(g);
   // gastos
   const q=$('#q').value.trim().toLowerCase();
   const ex=g.expenses.filter(x=>!q||x.desc.toLowerCase().includes(q)||(x.cat||'').toLowerCase().includes(q)||mem(g,x.payer).name.toLowerCase().includes(q))
@@ -246,6 +278,39 @@ function render(){
   $('#settle').onclick=e=>{const btn=e.target.closest('[data-s]');if(!btn)return;const x=t[+btn.dataset.s];
     snapshot('Pago registrado');g.expenses.push({id:uid(),type:'pago',desc:'Reembolso',amount:x.v,payer:x.from,split:{[x.to]:x.v},date:today(),cat:''});render()};
 }
+
+// ---- rondas del día (turnos para la ronda y los cafés) ----
+const TYPES=[['ronda','Ronda antes de comer','la ronda'],['cafe','Cafés','los cafés']];
+function rstats(g,type){const st={};g.members.forEach(m=>st[m.id]={paid:0,days:0,fair:0,last:''});
+  (g.rounds||[]).filter(r=>r.type===type).forEach(r=>{const n=r.present.length||1;r.present.forEach(id=>{if(st[id]){st[id].days++;st[id].fair+=1/n}});
+    if(st[r.who]){st[r.who].paid++;if(r.date>st[r.who].last)st[r.who].last=r.date}});return st}
+function nextUp(g,type,present,exclude){const st=rstats(g,type);let c=present.filter(id=>!exclude.includes(id));if(!c.length)c=present;
+  return c.sort((a,b)=>(st[b].fair-st[b].paid)-(st[a].fair-st[a].paid)||st[a].last.localeCompare(st[b].last)||st[a].paid-st[b].paid)[0]}
+function renderRounds(g){
+  g.rounds=g.rounds||[];const ids=g.members.map(m=>m.id);
+  g.present=(g.present||ids).filter(id=>ids.includes(id));const pr=g.present,t=today();
+  $('#pres').innerHTML=g.members.map(m=>`<button data-p="${m.id}" aria-pressed="${pr.includes(m.id)}">${av(g,m.id)}${esc(m.name)}</button>`).join('')||'<div class="empty">Añade personas en «Grupo».</div>';
+  const todayR=g.rounds.filter(r=>r.date===t);let h='';
+  TYPES.forEach(([type,label,art])=>{const done=todayR.find(r=>r.type===type);
+    if(done){h+=`<div class="turn paid"><small>${label}</small>${av(g,done.who)}<div class="who2">Hoy pagó ${esc(mem(g,done.who).name)}<span>${done.present.length} personas</span></div><div class="acts"><button class="sec" data-ru="${done.id}">Corregir</button></div></div>`;return}
+    if(pr.length<2){h+=`<div class="turn"><small>${label}</small><div class="who2" style="grid-column:1/-1;font-size:18px">Marca al menos a dos personas</div></div>`;return}
+    const other=todayR.filter(r=>r.type!==type).map(r=>r.who),n=nextUp(g,type,[...pr],other);
+    h+=`<div class="turn"><small>${label}</small>${av(g,n)}<div class="who2">Le toca a ${esc(mem(g,n).name)}<span>${other.length&&other[0]!==n?'Quien pagó la otra hoy queda fuera':'Es quien menos ha pagado para lo que viene'}</span></div>
+      <div class="acts"><button class="pri" data-rp="${type}|${n}">Ha pagado ${esc(mem(g,n).name)}</button><select class="in" data-ro="${type}" aria-label="Ha pagado otra persona"><option value="">Pagó otro…</option>${pr.filter(id=>id!==n).map(id=>`<option value="${id}">${esc(mem(g,id).name)}</option>`).join('')}</select></div></div>`});
+  $('#turns').innerHTML=h;
+  const s1=rstats(g,'ronda'),s2=rstats(g,'cafe');
+  $('#rtab').innerHTML=`<tr><th>Persona</th><th>Rondas</th><th>Cafés</th><th>Días</th><th>Balance</th></tr>`+g.members.map(m=>{const a=s1[m.id],b=s2[m.id],bal=(a.paid-a.fair)+(b.paid-b.fair),d=Math.max(a.days,b.days);
+    return`<tr><td>${esc(m.name)}</td><td>${a.paid}</td><td>${b.paid}</td><td>${d}</td><td style="color:${bal>0.25?'var(--pos)':bal<-0.25?'var(--neg)':'var(--mut)'}">${bal>0.25?'+':''}${bal.toFixed(1).replace('.',',')}</td></tr>`}).join('');
+  const days=[...new Set(g.rounds.map(r=>r.date))].sort().reverse().slice(0,10);
+  $('#rhist').innerHTML=days.map(d=>{const rs=g.rounds.filter(r=>r.date===d);
+    return`<div class="row" style="cursor:default"><span class="t"><b>${new Date(d+'T12:00').toLocaleDateString('es-ES',{weekday:'long',day:'numeric',month:'short'})}</b><span class="s">${rs.map(r=>`${r.type==='ronda'?'Ronda':'Cafés'}: ${esc(mem(g,r.who).name)}`).join(' · ')} · ${rs[0].present.length} personas</span></span></div>`}).join('')||'<div class="empty">Aún no hay turnos apuntados.</div>';
+  $('#rtab').insertAdjacentHTML('afterend','');
+}
+$('#v-rondas').addEventListener('click',e=>{const g=G();
+  const p=e.target.closest('[data-p]');if(p){const id=p.dataset.p;g.present=g.present.includes(id)?g.present.filter(x=>x!==id):[...g.present,id];render();return}
+  const b=e.target.closest('[data-rp]');if(b){const[type,who]=b.dataset.rp.split('|');g.rounds.push({id:uid(),type,who,date:today(),present:[...g.present]});render();return}
+  const u=e.target.closest('[data-ru]');if(u){snapshot('Turno borrado');g.rounds=g.rounds.filter(r=>r.id!==u.dataset.ru);render()}});
+$('#v-rondas').addEventListener('change',e=>{const s=e.target.closest('[data-ro]');if(s&&s.value){const g=G();g.rounds.push({id:uid(),type:s.dataset.ro,who:s.value,date:today(),present:[...g.present]});render()}});
 
 // deshacer
 let undo=null,tt;
@@ -340,6 +405,7 @@ const HELP=[
  ['Apunta cada gasto','Pulsa «+ Añadir gasto». Escanea el ticket o escribe el importe, elige el concepto con un toque, quién pagó y entre quiénes se reparte.'],
  ['Elige cómo repartir','«A partes iguales» divide entre los marcados (los céntimos sueltos se reparten solos). «Importes exactos» te deja poner la parte de cada uno; la app avisa si falta o sobra.'],
  ['Mira los saldos','En «Saldos», verde es quien ha puesto de más y le deben; rojo es quien debe. Saldo = lo que pagó menos lo que le toca.'],
+ ['Rondas del día','Para la ronda antes de comer y los cafés, que van aparte. Marca quién ha venido hoy y la app dice a quién le toca cada cosa; quien paga la ronda no paga los cafés ese día. Es justo con la asistencia: quien viene más días paga más veces. «Balance» en positivo es quien ha pagado de más.'],
  ['Liquida con los mínimos pagos','«Liquidar» calcula quién paga a quién con el menor número de transferencias. Cuando se haga un pago, pulsa «Hecho»: queda apuntado como reembolso y todo se recalcula.']];
 function helpSheet(){open(head('Cómo funciona')+HELP.map((h,i)=>`<div class="hs"><span class="n">${i+1}</span><h3>${h[0]}</h3><p>${h[1]}</p></div>`).join('')+`
   <div class="tip"><b>Escanear ticket</b>La foto se lee en tu propio móvil, no se envía a ningún sitio. La primera vez tarda un poco más porque descarga el lector. Revisa siempre el importe antes de guardar: un ticket arrugado o con poca luz puede leerse mal.</div>
