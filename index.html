@@ -107,6 +107,12 @@ textarea.in{min-height:110px;padding:12px;font-size:13px}
 .toast.on{display:flex}
 .toast button{border:0;background:var(--yel);color:#1d1a17;border-radius:8px;min-height:36px;padding:0 12px;font-weight:700}
 .note{font-size:13px;color:var(--mut);margin-top:22px}
+.live{margin-top:12px;display:inline-flex;align-items:center;gap:8px;background:rgba(0,0,0,.18);border-radius:16px;padding:5px 12px;font-size:14px;font-weight:600}
+.live i{width:9px;height:9px;border-radius:50%;background:#7dffb0;box-shadow:0 0 0 3px rgba(125,255,176,.25)}
+.live.off i{background:var(--yel);box-shadow:none}.live.err i{background:#fff;box-shadow:none}
+.share{background:var(--card);border:2px solid var(--red);border-radius:16px;padding:14px;margin-top:18px}
+.share b{display:block;font:700 17px Sora,sans-serif;margin-bottom:4px}
+.share p{margin:0 0 10px;color:var(--mut);font-size:15px}
 .scan{display:flex;align-items:center;justify-content:center;gap:10px;min-height:52px;border:2px dashed var(--red);border-radius:14px;color:var(--redd);font-weight:700;margin-top:12px;cursor:pointer;position:relative}
 .scan input{position:absolute;inset:0;opacity:0;cursor:pointer}
 .scan.busy{border-style:solid;opacity:.7;pointer-events:none}
@@ -148,6 +154,7 @@ textarea.in{min-height:110px;padding:12px;font-size:13px}
     <button class="ib" id="gnew" aria-label="Nuevo grupo">+ Nuevo</button>
     <button class="ib" id="help" aria-label="Cómo funciona" style="font:800 20px Sora,sans-serif">?</button>
   </div>
+  <div class="live" id="live" hidden></div>
   <div class="tot">
     <div><small>Gasto total del grupo</small><div class="num" id="total">0 €</div></div>
     <div class="chips" id="chips"></div>
@@ -232,6 +239,66 @@ let S;
 try{S=JSON.parse(localStorage.getItem(KEY))}catch(e){}
 if(!S||!S.groups||!S.groups.length){const g=sample();S={groups:[g],cur:g.id}}
 const save=()=>{try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}};
+// ---- grupos compartidos (Firebase Realtime Database) ----
+const DB='https://cuentas-claras-6c9f5-default-rtdb.europe-west1.firebasedatabase.app';
+S.queue=S.queue||[];
+let netState='ok',es=null,esCode=null,pullT=0;
+const url=(code,path)=>`${DB}/grupos/${encodeURIComponent(code)}${path?'/'+path:''}.json`;
+const asArr=v=>Array.isArray(v)?v.filter(x=>x!=null):v&&typeof v==='object'?Object.values(v):[];
+function newCode(){const a='abcdefghijkmnpqrstuvwxyz23456789',b=new Uint8Array(24);crypto.getRandomValues(b);return Array.from(b,x=>a[x%a.length]).join('')}
+function toRemote(g){return{name:g.name,members:Object.fromEntries(g.members.map((m,i)=>[m.id,{id:m.id,name:m.name,o:i}])),
+  expenses:Object.fromEntries(g.expenses.map(x=>[x.id,x])),rounds:Object.fromEntries((g.rounds||[]).map(r=>[r.id,r])),
+  present:Object.fromEntries((g.present||g.members.map(m=>m.id)).map(id=>[id,true]))}}
+function applyRemote(g,d){if(!d)return;
+  g.name=d.name||g.name;g.members=asArr(d.members).sort((a,b)=>(a.o||0)-(b.o||0)).map(m=>({id:m.id,name:m.name}));
+  g.expenses=asArr(d.expenses).map(x=>({...x,split:x.split||{}}));g.rounds=asArr(d.rounds).map(r=>({...r,present:asArr(r.present)}));
+  g.present=d.present?Object.keys(d.present):g.members.map(m=>m.id)}
+function setNet(st){netState=st;showLive()}
+function showLive(){const g=G(),el=$('#live');if(!el)return;el.hidden=!g.shared;if(!g.shared)return;
+  const pend=S.queue.some(q=>q.code===g.shared);
+  el.className='live'+(netState==='ok'&&!pend?'':netState==='err'?' err':' off');
+  el.innerHTML='<i></i>'+(netState==='err'?'Sin sincronizar · mira Grupo':pend||netState==='off'?'Sin conexión · se sube al volver':'En vivo con la cuadrilla')}
+function enqueue(g,method,path,body,cond){if(!g.shared)return;S.queue.push({code:g.shared,method,path,body,cond});save();showLive();flush()}
+const putR=(g,path,val)=>enqueue(g,'PUT',path,val);
+const delR=(g,path)=>enqueue(g,'DELETE',path);
+let flushing=false;
+async function flush(){if(flushing)return;flushing=true;const touched=new Set();
+  try{while(S.queue.length){const q=S.queue[0];let res;
+      if(q.cond){const r0=await fetch(url(q.code,q.path),{headers:{'X-Firebase-ETag':'true'},cache:'no-store'});
+        if(!r0.ok)throw r0;const cur=await r0.json();
+        res=cur?{status:412,cur}:await fetch(url(q.code,q.path),{method:'PUT',headers:{'if-match':r0.headers.get('ETag')},body:JSON.stringify(q.body)});
+        if(res.status===412){const g=S.groups.find(x=>x.shared===q.code);const c=res.cur||await (await fetch(url(q.code,q.path))).json();
+          if(g&&c&&c.who!==q.body.who)toastMsg(`Alguien ya lo había apuntado: pagó ${mem(g,c.who).name}`)}
+        else if(!res.ok)throw res}
+      else{res=await fetch(url(q.code,q.path),{method:q.method,body:q.body===undefined?undefined:JSON.stringify(q.body)});
+        if(!res.ok&&res.status!==404)throw res}
+      touched.add(q.code);S.queue.shift();save()}
+    setNet('ok')}
+  catch(e){setNet(e&&e.status&&e.status!==0&&e.status<500?'err':'off')}
+  flushing=false;for(const c of touched)pull(c);showLive()}
+async function pull(code){if(S.queue.some(q=>q.code===code))return;
+  try{const r=await fetch(url(code),{cache:'no-store'});if(!r.ok)throw r;const d=await r.json();const g=S.groups.find(x=>x.shared===code);
+    if(!g)return;if(!d){setNet('err');return}if(S.queue.some(q=>q.code===code))return;applyRemote(g,d);save();setNet('ok');if(G()===g)render()}
+  catch(e){setNet('off')}}
+function listen(){const g=G(),code=g.shared||null;if(code===esCode)return;
+  if(es){es.close();es=null}esCode=code;if(!code||!window.EventSource)return;
+  es=new EventSource(url(code));
+  const on=ev=>{try{const m=JSON.parse(ev.data);const gg=S.groups.find(x=>x.shared===code);if(!gg||S.queue.some(q=>q.code===code))return;
+      if(m.path==='/'&&ev.type==='put'){if(m.data){applyRemote(gg,m.data);save();setNet('ok');if(G()===gg)render()}}
+      else{clearTimeout(pullT);pullT=setTimeout(()=>pull(code),250)}}catch(e){}};
+  es.addEventListener('put',on);es.addEventListener('patch',on);es.onerror=()=>setNet(navigator.onLine?netState:'off')}
+addEventListener('online',()=>{flush();const g=G();if(g.shared)pull(g.shared)});
+document.addEventListener('visibilitychange',()=>{if(!document.hidden){flush();const g=G();if(g.shared)pull(g.shared)}});
+let toastT;function toastMsg(m){const t=$('#toast');$('#tmsg').textContent=m;$('#tundo').hidden=true;t.classList.add('on');clearTimeout(toastT);toastT=setTimeout(()=>{t.classList.remove('on');$('#tundo').hidden=false},4500)}
+async function joinFromUrl(){const m=location.search.match(/[?&]g=([a-z0-9]{20,})/);if(!m)return;const code=m[1];
+  const ex=S.groups.find(x=>x.shared===code);if(ex){S.cur=ex.id;render();pull(code);return}
+  try{const r=await fetch(url(code),{cache:'no-store'});const d=r.ok?await r.json():null;
+    if(!d){toastMsg('Ese grupo compartido no existe o se ha borrado');return}
+    const g={id:uid(),shared:code,name:'',members:[],expenses:[],rounds:[]};applyRemote(g,d);S.groups.push(g);S.cur=g.id;
+    S.groups=S.groups.filter(x=>!(x.name==='Finde en Hondarribia'&&isDemo(x)&&x.expenses.length===6&&!(x.rounds||[]).length));
+    render();toastMsg(`Te has unido a «${g.name}»`)}
+  catch(e){toastMsg('Sin conexión: abre el enlace otra vez cuando tengas internet')}}
+const shareLink=g=>location.origin+location.pathname+'?g='+g.shared;
 const G=()=>S.groups.find(g=>g.id===S.cur)||S.groups[0];
 const mem=(g,id)=>g.members.find(m=>m.id===id)||{name:'?',id};
 const col=(g,id)=>COLS[Math.max(0,g.members.findIndex(m=>m.id===id))%COLS.length];
@@ -254,7 +321,7 @@ function settle(b){
   return t}
 
 function render(){
-  const g=G();S.cur=g.id;save();
+  const g=G();S.cur=g.id;save();listen();showLive();
   $('#gsel').innerHTML=S.groups.map(x=>`<option value="${x.id}"${x.id===g.id?' selected':''}>${esc(x.name)}</option>`).join('');
   $('#total').textContent=eur(g.expenses.filter(x=>x.type==='gasto').reduce((s,x)=>s+x.amount,0));
   $('#chips').innerHTML=g.members.map(m=>av(g,m.id)).join('');
@@ -288,7 +355,7 @@ function render(){
     t.map((x,i)=>`<div class="tr"><span class="arrow">${av(g,x.from)}${arr}${av(g,x.to)}</span><span class="who"><b>${esc(mem(g,x.from).name)}</b> <em>paga a</em> <b>${esc(mem(g,x.to).name)}</b><br><span class="num" style="font-weight:800;font-size:20px">${eur(x.v)}</span></span><button class="ok" data-s="${i}">Hecho</button></div>`).join('')
     :`<div class="done"><div class="num">Cuentas claras</div><p>Nadie debe nada a nadie.</p></div>`)+`</div>`;
   $('#settle').onclick=e=>{const btn=e.target.closest('[data-s]');if(!btn)return;const x=t[+btn.dataset.s];
-    snapshot('Pago registrado');g.expenses.push({id:uid(),type:'pago',desc:'Reembolso',amount:x.v,payer:x.from,split:{[x.to]:x.v},date:today(),cat:''});render()};
+    snapshot('Pago registrado');const pg={id:uid(),type:'pago',desc:'Reembolso',amount:x.v,payer:x.from,split:{[x.to]:x.v},date:today(),cat:''};g.expenses.push(pg);putR(g,'expenses/'+pg.id,pg);render()};
 }
 
 // ---- rondas del día (turnos para la ronda y los cafés) ----
@@ -338,15 +405,20 @@ function renderPoteo(g,pr,t){
 }
 $('#v-rondas').addEventListener('click',e=>{const g=G();
   const rm=e.target.closest('[data-rm]');if(rm){g.rmode=rm.dataset.rm;render();return}
-  const p=e.target.closest('[data-p]');if(p){const id=p.dataset.p;g.present=g.present.includes(id)?g.present.filter(x=>x!==id):[...g.present,id];render();return}
-  const b=e.target.closest('[data-rp]');if(b){const[type,who]=b.dataset.rp.split('|');g.rounds.push({id:uid(),type,who,date:today(),present:[...g.present]});render();return}
-  const u=e.target.closest('[data-ru]');if(u){snapshot('Turno borrado');g.rounds=g.rounds.filter(r=>r.id!==u.dataset.ru);render()}});
-$('#v-rondas').addEventListener('change',e=>{const s=e.target.closest('[data-ro]');if(s&&s.value){const g=G();g.rounds.push({id:uid(),type:s.dataset.ro,who:s.value,date:today(),present:[...g.present]});render()}});
+  const p=e.target.closest('[data-p]');if(p){const id=p.dataset.p;g.present=g.present.includes(id)?g.present.filter(x=>x!==id):[...g.present,id];putR(g,'present',Object.fromEntries(g.present.map(i=>[i,true])));render();return}
+  const b=e.target.closest('[data-rp]');if(b){const[type,who]=b.dataset.rp.split('|');addRound(g,type,who);return}
+  const u=e.target.closest('[data-ru]');if(u){snapshot('Turno borrado');g.rounds=g.rounds.filter(r=>r.id!==u.dataset.ru);delR(g,'rounds/'+u.dataset.ru);render()}});
+$('#v-rondas').addEventListener('change',e=>{const s=e.target.closest('[data-ro]');if(s&&s.value){addRound(G(),s.dataset.ro,s.value)}});
+function addRound(g,type,who){const d=today();
+  const id=type==='poteo'?`${d}_p${g.rounds.filter(r=>r.type==='poteo'&&r.date===d).length+1}`:`${d}_${type}`;
+  if(g.rounds.some(r=>r.id===id)){toastMsg('Esa ronda ya estaba apuntada');render();return}
+  const r={id,type,who,date:d,present:[...g.present]};g.rounds.push(r);
+  if(g.shared)enqueue(g,'PUT','rounds/'+id,r,true);render()}
 
 // deshacer
 let undo=null,tt;
-function snapshot(msg){undo=JSON.stringify(S);$('#tmsg').textContent=msg;$('#toast').classList.add('on');clearTimeout(tt);tt=setTimeout(()=>$('#toast').classList.remove('on'),5000)}
-$('#tundo').onclick=()=>{if(undo){S=JSON.parse(undo);undo=null;render()}$('#toast').classList.remove('on')};
+function snapshot(msg){undo=JSON.stringify(S);$('#tundo').hidden=false;$('#tmsg').textContent=msg;$('#toast').classList.add('on');clearTimeout(tt);tt=setTimeout(()=>$('#toast').classList.remove('on'),5000)}
+$('#tundo').onclick=()=>{if(undo){const q=S.queue;S=JSON.parse(undo);S.queue=q;undo=null;const g=G();if(g.shared)putR(g,'',toRemote(g));render()}$('#toast').classList.remove('on')};
 
 // hojas
 const open=html=>{$('#sheet').innerHTML=html;$('#ov').classList.add('on');const f=$('#sheet input:not([type=checkbox]),#sheet textarea');if(f&&matchMedia('(hover:hover)').matches)f.focus()};
@@ -359,7 +431,7 @@ function expenseSheet(id){
   const g=G();if(!g.members.length){groupSheet();return}
   const x=g.expenses.find(e=>e.id===id);
   if(x&&x.type==='pago'){open(head('Reembolso')+`<p>${esc(mem(g,x.payer).name)} pagó ${eur(x.amount)} a ${esc(mem(g,Object.keys(x.split)[0]).name)}.</p><div class="btns"><button class="sec del" id="xdel">Eliminar</button><button class="pri x">Cerrar</button></div>`);
-    $('#xdel').onclick=()=>{snapshot('Reembolso eliminado');g.expenses=g.expenses.filter(e=>e!==x);close();render()};return}
+    $('#xdel').onclick=()=>{snapshot('Reembolso eliminado');g.expenses=g.expenses.filter(e=>e.id!==x.id);delR(g,'expenses/'+x.id);close();render()};return}
   let mode='igual',on=new Set(x?Object.keys(x.split):g.members.map(m=>m.id)),custom={...(x?x.split:{})};
   if(x&&g.members.some(m=>x.split[m.id]!==undefined)){const eq=equal(x.amount,Object.keys(x.split));if(Object.keys(x.split).some(k=>eq[k]!==x.split[k]))mode='importes'}
   open(head(x?'Editar gasto':'Nuevo gasto')+`
@@ -403,8 +475,8 @@ function expenseSheet(id){
   document.querySelectorAll('.seg button').forEach(b=>b.onclick=()=>{mode=b.dataset.m;if(mode==='importes'){const eq=equal(toC($('#fa').value),[...on]);custom={...eq}}draw()});
   $('#fs').onclick=()=>{const tot=toC($('#fa').value),split=mode==='igual'?equal(tot,[...on]):Object.fromEntries([...on].map(k=>[k,custom[k]||0]));
     const d={id:x?x.id:uid(),type:'gasto',desc:$('#fd').value.trim(),amount:tot,payer:$('#fp').value,cat:$('#fc').value,date:$('#ft').value||today(),split};
-    if(x)g.expenses[g.expenses.indexOf(x)]=d;else g.expenses.push(d);close();tab='gastos';render()};
-  if(x)$('#xdel').onclick=()=>{snapshot('Gasto eliminado');g.expenses=g.expenses.filter(e=>e!==x);close();render()};
+    const i=g.expenses.findIndex(e=>e.id===d.id);if(i>=0)g.expenses[i]=d;else g.expenses.push(d);putR(g,'expenses/'+d.id,d);close();tab='gastos';render()};
+  if(x)$('#xdel').onclick=()=>{snapshot('Gasto eliminado');g.expenses=g.expenses.filter(e=>e.id!==x.id);delR(g,'expenses/'+x.id);close();render()};
   draw();
 }
 
@@ -418,18 +490,33 @@ function groupSheet(isNew){
     <div class="btns"><button class="pri" id="gs">${isNew?'Crear grupo':'Guardar'}</button></div>
     ${!isNew&&isDemo(g)?`<div class="tip"><b>Datos de ejemplo</b>Ane, Iker, Maite y Jon y todos sus gastos son de prueba. Se quitan sin tocar a las personas que has añadido tú.<div class="btns" style="margin-top:10px"><button class="sec del" id="gdemo">Quitar el ejemplo</button></div></div>`:''}
     ${isNew?`<label class="f" for="gi">¿Te han pasado un grupo? Pega aquí el código</label><textarea class="in" id="gi"></textarea><div class="btns"><button class="sec" id="gim">Importar grupo</button></div><p class="hint" id="gih"></p>`:
-    `<label class="f">Compartir con otro móvil</label><p class="hint" style="color:var(--mut)">Copia este código y pégalo en «+ Nuevo» del otro dispositivo.</p><textarea class="in" id="gx" readonly>${esc(btoa(unescape(encodeURIComponent(JSON.stringify(g)))))}</textarea>
-    <div class="btns"><button class="sec" id="gcp">Copiar código</button><button class="sec del" id="gdel">Eliminar grupo</button></div>`}`);
+    (g.shared?`<div class="share"><b>Grupo compartido en vivo</b><p>Todos los que tengan este enlace ven y apuntan lo mismo al momento. Mándalo solo a la cuadrilla.</p>
+      <textarea class="in" id="gx" readonly style="min-height:70px">${esc(shareLink(g))}</textarea>
+      <div class="btns"><button class="pri" id="gsh">Enviar enlace</button></div></div>
+      <div class="btns"><button class="sec" id="gloc">Seguir solo en este móvil</button><button class="sec del" id="gdel">Salir del grupo</button></div>
+      <p class="hint" style="color:var(--mut)">«Seguir solo en este móvil» deja de sincronizar y te quedas una copia, por si la conexión falla. «Salir» lo quita de tu móvil; los demás lo siguen teniendo.</p>`
+    :`<div class="share"><b>Compartir en vivo con la cuadrilla</b><p>Crea un enlace: todos los que lo abran verán los mismos gastos, turnos y rondas, y cualquiera podrá apuntar.</p>
+      <div class="btns"><button class="pri" id="gon">Compartir este grupo</button></div><p class="hint" id="gonh"></p></div>
+    <label class="f">O pasar una copia a otro móvil</label><p class="hint" style="color:var(--mut)">Copia este código y pégalo en «+ Nuevo» del otro dispositivo. Es una copia: no se sincroniza.</p><textarea class="in" id="gx" readonly>${esc(btoa(unescape(encodeURIComponent(JSON.stringify({...g,shared:undefined})))))}</textarea>
+    <div class="btns"><button class="sec" id="gcp">Copiar código</button><button class="sec del" id="gdel">Eliminar grupo</button></div>`)}`);
     const add=()=>{const v=$('#gm').value.trim();if(!v)return;g.name=$('#gn').value;g.members.push({id:uid(),name:v});draw();$('#gm').focus()};
     $('#ga').onclick=add;$('#gm').onkeydown=e=>{if(e.key==='Enter')add()};
     $('#ml').onclick=e=>{const r=e.target.dataset.r;if(r){g.name=$('#gn').value;g.members=g.members.filter(m=>m.id!==r);draw()}};
-    if($('#gdemo'))$('#gdemo').onclick=()=>{snapshot('Ejemplo quitado');g.name=$('#gn').value.trim()||g.name;clearDemo(g);close();render()};
+    if($('#gdemo'))$('#gdemo').onclick=()=>{snapshot('Ejemplo quitado');g.name=$('#gn').value.trim()||g.name;clearDemo(g);if(g.shared)putR(g,'',toRemote(g));close();render()};
     $('#gs').onclick=()=>{const pend=$('#gm').value.trim();if(pend)g.members.push({id:uid(),name:pend});g.name=$('#gn').value.trim()||'Mi grupo';
-      if(isNew)S.groups.push(g);S.cur=g.id;close();render()};
+      if(isNew)S.groups.push(g);if(g.shared){const r=toRemote(g);putR(g,'name',r.name);putR(g,'members',r.members)}S.cur=g.id;close();render()};
+    if($('#gon'))$('#gon').onclick=async()=>{g.name=$('#gn').value.trim()||g.name||'Mi grupo';const code=newCode();$('#gon').disabled=true;$('#gonh').textContent='Creando…';
+      try{const r=await fetch(url(code),{method:'PUT',body:JSON.stringify(toRemote(g))});if(!r.ok)throw r;g.shared=code;g.rounds=g.rounds||[];save();draw();render()}
+      catch(e){$('#gon').disabled=false;$('#gonh').innerHTML='<span class="bad">No se pudo crear. Comprueba la conexión e inténtalo otra vez.</span>'}};
+    if($('#gsh'))$('#gsh').onclick=async()=>{const link=shareLink(g),text=`Únete a «${g.name}» en Cuentas claras para llevar las rondas y los gastos juntos:`;
+      try{if(navigator.share){await navigator.share({title:'Cuentas claras',text,url:link});return}}catch(e){if(e.name==='AbortError')return}
+      try{await navigator.clipboard.writeText(link);$('#gsh').textContent='Enlace copiado'}catch(e){$('#gx').select();$('#gsh').textContent='Selecciónalo y copia'}};
+    if($('#gloc'))$('#gloc').onclick=()=>{S.queue=S.queue.filter(q=>q.code!==g.shared);delete g.shared;save();close();render();toastMsg('Ahora este grupo solo está en tu móvil')};
     if(isNew)$('#gim').onclick=()=>{try{const n=JSON.parse(decodeURIComponent(escape(atob($('#gi').value.trim()))));if(!n.members||!n.expenses)throw 0;
-        n.id=uid();S.groups.push(n);S.cur=n.id;close();render()}catch(e){$('#gih').innerHTML='<span class="bad">Ese código no es válido.</span>'}};
-    else{$('#gcp').onclick=async()=>{const ta=$('#gx');try{await navigator.clipboard.writeText(ta.value);$('#gcp').textContent='Copiado'}catch(e){ta.select();$('#gcp').textContent='Selecciónalo y copia'}};
-      $('#gdel').onclick=()=>{snapshot('Grupo eliminado');S.groups=S.groups.filter(x=>x!==g);if(!S.groups.length){const n={id:uid(),name:'Mi grupo',members:[],expenses:[]};S.groups.push(n)}S.cur=S.groups[0].id;close();render()}}
+        n.id=uid();delete n.shared;S.groups.push(n);S.cur=n.id;close();render()}catch(e){$('#gih').innerHTML='<span class="bad">Ese código no es válido.</span>'}};
+    else{
+      if($('#gcp'))$('#gcp').onclick=async()=>{const ta=$('#gx');try{await navigator.clipboard.writeText(ta.value);$('#gcp').textContent='Copiado'}catch(e){ta.select();$('#gcp').textContent='Selecciónalo y copia'}};
+      $('#gdel').onclick=()=>{snapshot(g.shared?'Has salido del grupo':'Grupo eliminado');if(g.shared)S.queue=S.queue.filter(q=>q.code!==g.shared);S.groups=S.groups.filter(x=>x!==g);if(!S.groups.length){const n={id:uid(),name:'Mi grupo',members:[],expenses:[]};S.groups.push(n)}S.cur=S.groups[0].id;close();render()}}
   };draw();
 }
 
@@ -439,6 +526,7 @@ const HELP=[
  ['Elige cómo repartir','«A partes iguales» divide entre los marcados (los céntimos sueltos se reparten solos). «Importes exactos» te deja poner la parte de cada uno; la app avisa si falta o sobra.'],
  ['Mira los saldos','En «Saldos», verde es quien ha puesto de más y le deben; rojo es quien debe. Saldo = lo que pagó menos lo que le toca.'],
  ['Rondas del día','Para la ronda antes de comer, los cafés y las copas, que van aparte. Marca quién ha venido hoy y la app dice a quién le toca cada cosa; si hay gente suficiente, nadie paga dos cosas el mismo día. Las copas solo se apuntan los días que las hay. En modo «Poteo» se apuntan todas las rondas que hagáis, una por bar, y siempre te dice a quién le toca la siguiente. Es justo con la asistencia: quien viene más días paga más veces. «Balance» en positivo es quien ha pagado de más.'],
+ ['Comparte en vivo','En Grupo → «Compartir este grupo» se crea un enlace. Mándalo a la cuadrilla: todos ven lo mismo y cualquiera puede apuntar. Si dos apuntan la misma ronda a la vez, solo cuenta la primera. Sin cobertura se guarda en el móvil y se sube al volver.'],
  ['Liquida con los mínimos pagos','«Liquidar» calcula quién paga a quién con el menor número de transferencias. Cuando se haga un pago, pulsa «Hecho»: queda apuntado como reembolso y todo se recalcula.']];
 function helpSheet(){open(head('Cómo funciona')+HELP.map((h,i)=>`<div class="hs"><span class="n">${i+1}</span><h3>${h[0]}</h3><p>${h[1]}</p></div>`).join('')+`
   <div class="tip"><b>Escanear ticket</b>La foto se lee en tu propio móvil, no se envía a ningún sitio. La primera vez tarda un poco más porque descarga el lector. Revisa siempre el importe antes de guardar: un ticket arrugado o con poca luz puede leerse mal.</div>
@@ -455,7 +543,7 @@ $('#gedit').onclick=()=>groupSheet(false);
 $('#gnew').onclick=()=>groupSheet(true);
 $('#q').oninput=render;
 document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{tab=b.dataset.t;render()});
-render();
+render();flush();joinFromUrl();{const g=G();if(g.shared)pull(g.shared)}
 }
 </script>
 </body>
