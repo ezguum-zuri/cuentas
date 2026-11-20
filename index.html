@@ -168,7 +168,7 @@ textarea.in{min-height:110px;padding:12px;font-size:13px}
     <h2 style="margin-top:26px">Últimos días</h2>
     <div id="rhist"></div>
   </section>
-  <p class="note" id="demo">El grupo «Finde en Hondarribia» es un ejemplo: bórralo o crea el tuyo con «+ Nuevo». Los datos se guardan en este dispositivo; para pasarlos a otro móvil usa Grupo → Compartir.</p>
+  <p class="note" id="demo">Ane, Iker, Maite y Jon y sus gastos son un ejemplo para ver cómo funciona. Quítalos en Grupo → «Quitar el ejemplo».</p>
 </main>
 <button class="fab" id="fab">+ Añadir gasto</button>
 
@@ -232,6 +232,12 @@ const col=(g,id)=>COLS[Math.max(0,g.members.findIndex(m=>m.id===id))%COLS.length
 const av=(g,id)=>`<span class="av" style="background:${col(g,id)}">${esc(mem(g,id).name[0]||'?').toUpperCase()}</span>`;
 let tab='gastos';
 
+const DEMO=/^m[0-3]$/,isDemo=g=>g.members.some(m=>DEMO.test(m.id));
+function clearDemo(g){const out=id=>DEMO.test(id);
+  g.expenses=g.expenses.filter(x=>!out(x.payer)&&!Object.keys(x.split).some(out));
+  g.rounds=(g.rounds||[]).filter(r=>!out(r.who)).map(r=>({...r,present:r.present.filter(id=>!out(id))}));
+  g.members=g.members.filter(m=>!out(m.id));g.present=(g.present||[]).filter(id=>!out(id));
+  if(g.name==='Finde en Hondarribia')g.name='Mi grupo'}
 function balances(g){const b={};g.members.forEach(m=>b[m.id]=0);
   g.expenses.forEach(x=>{b[x.payer]=(b[x.payer]||0)+x.amount;for(const k in x.split)b[k]=(b[k]||0)-x.split[k]});return b}
 function settle(b){
@@ -246,7 +252,7 @@ function render(){
   $('#gsel').innerHTML=S.groups.map(x=>`<option value="${x.id}"${x.id===g.id?' selected':''}>${esc(x.name)}</option>`).join('');
   $('#total').textContent=eur(g.expenses.filter(x=>x.type==='gasto').reduce((s,x)=>s+x.amount,0));
   $('#chips').innerHTML=g.members.map(m=>av(g,m.id)).join('');
-  $('#demo').hidden=!S.groups.some(x=>x.name==='Finde en Hondarribia');
+  $('#demo').hidden=!isDemo(g);
   document.querySelectorAll('nav button').forEach(b=>b.setAttribute('aria-selected',b.dataset.t===tab));
   ['gastos','saldos','liquidar','rondas'].forEach(t=>$('#v-'+t).hidden=t!==tab);
   $('#fab').hidden=tab==='rondas';
@@ -385,12 +391,14 @@ function groupSheet(isNew){
     <label class="f" for="gm">Personas</label><div id="ml">${g.members.map(m=>`<div class="ml">${av(g,m.id)}<span>${esc(m.name)}</span>${used(m.id)?'<small style="color:var(--mut)">con gastos</small>':`<button class="sec" style="min-height:40px" data-r="${m.id}">Quitar</button>`}</div>`).join('')}</div>
     <div class="two" style="margin-top:10px;grid-template-columns:minmax(0,1fr) auto"><input class="in" id="gm" placeholder="Nombre de la persona"><button class="sec" id="ga">Añadir</button></div>
     <div class="btns"><button class="pri" id="gs">${isNew?'Crear grupo':'Guardar'}</button></div>
+    ${!isNew&&isDemo(g)?`<div class="tip"><b>Datos de ejemplo</b>Ane, Iker, Maite y Jon y todos sus gastos son de prueba. Se quitan sin tocar a las personas que has añadido tú.<div class="btns" style="margin-top:10px"><button class="sec del" id="gdemo">Quitar el ejemplo</button></div></div>`:''}
     ${isNew?`<label class="f" for="gi">¿Te han pasado un grupo? Pega aquí el código</label><textarea class="in" id="gi"></textarea><div class="btns"><button class="sec" id="gim">Importar grupo</button></div><p class="hint" id="gih"></p>`:
     `<label class="f">Compartir con otro móvil</label><p class="hint" style="color:var(--mut)">Copia este código y pégalo en «+ Nuevo» del otro dispositivo.</p><textarea class="in" id="gx" readonly>${esc(btoa(unescape(encodeURIComponent(JSON.stringify(g)))))}</textarea>
     <div class="btns"><button class="sec" id="gcp">Copiar código</button><button class="sec del" id="gdel">Eliminar grupo</button></div>`}`);
     const add=()=>{const v=$('#gm').value.trim();if(!v)return;g.name=$('#gn').value;g.members.push({id:uid(),name:v});draw();$('#gm').focus()};
     $('#ga').onclick=add;$('#gm').onkeydown=e=>{if(e.key==='Enter')add()};
     $('#ml').onclick=e=>{const r=e.target.dataset.r;if(r){g.name=$('#gn').value;g.members=g.members.filter(m=>m.id!==r);draw()}};
+    if($('#gdemo'))$('#gdemo').onclick=()=>{snapshot('Ejemplo quitado');g.name=$('#gn').value.trim()||g.name;clearDemo(g);close();render()};
     $('#gs').onclick=()=>{const pend=$('#gm').value.trim();if(pend)g.members.push({id:uid(),name:pend});g.name=$('#gn').value.trim()||'Mi grupo';
       if(isNew)S.groups.push(g);S.cur=g.id;close();render()};
     if(isNew)$('#gim').onclick=()=>{try{const n=JSON.parse(decodeURIComponent(escape(atob($('#gi').value.trim()))));if(!n.members||!n.expenses)throw 0;
