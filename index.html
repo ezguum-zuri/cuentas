@@ -286,7 +286,7 @@ function render(){
 }
 
 // ---- rondas del día (turnos para la ronda y los cafés) ----
-const TYPES=[['ronda','Ronda antes de comer','la ronda'],['cafe','Cafés','los cafés']];
+const TYPES=[['ronda','Ronda antes de comer','Ronda'],['cafe','Cafés','Cafés'],['copas','Copas','Copas']];const TNAME=Object.fromEntries(TYPES.map(t=>[t[0],t[2]]));
 function rstats(g,type){const st={};g.members.forEach(m=>st[m.id]={paid:0,days:0,fair:0,last:''});
   (g.rounds||[]).filter(r=>r.type===type).forEach(r=>{const n=r.present.length||1;r.present.forEach(id=>{if(st[id]){st[id].days++;st[id].fair+=1/n}});
     if(st[r.who]){st[r.who].paid++;if(r.date>st[r.who].last)st[r.who].last=r.date}});return st}
@@ -296,20 +296,20 @@ function renderRounds(g){
   g.rounds=g.rounds||[];const ids=g.members.map(m=>m.id);
   g.present=(g.present||ids).filter(id=>ids.includes(id));const pr=g.present,t=today();
   $('#pres').innerHTML=g.members.map(m=>`<button data-p="${m.id}" aria-pressed="${pr.includes(m.id)}">${av(g,m.id)}${esc(m.name)}</button>`).join('')||'<div class="empty">Añade personas en «Grupo».</div>';
-  const todayR=g.rounds.filter(r=>r.date===t);let h='',sug=null;
+  const todayR=g.rounds.filter(r=>r.date===t);let h='',sugs=[];
   TYPES.forEach(([type,label,art])=>{const done=todayR.find(r=>r.type===type);
     if(done){h+=`<div class="turn paid"><small>${label}</small>${av(g,done.who)}<div class="who2">Hoy pagó ${esc(mem(g,done.who).name)}<span>${done.present.length} personas</span></div><div class="acts"><button class="sec" data-ru="${done.id}">Corregir</button></div></div>`;return}
     if(pr.length<2){h+=`<div class="turn"><small>${label}</small><div class="who2" style="grid-column:1/-1;font-size:18px">Marca al menos a dos personas</div></div>`;return}
-    const other=todayR.filter(r=>r.type!==type).map(r=>r.who);if(!other.length&&sug)other.push(sug);const n=nextUp(g,type,[...pr],other);sug=n;
-    h+=`<div class="turn"><small>${label}</small>${av(g,n)}<div class="who2">Le toca a ${esc(mem(g,n).name)}<span>${type==='cafe'&&other.length?'Así no paga el mismo la ronda y los cafés':'Es quien menos ha pagado para lo que viene'}</span></div>
+    const paidO=todayR.filter(r=>r.type!==type).map(r=>r.who),other=[...new Set([...paidO,...sugs])];const n=nextUp(g,type,[...pr],other);sugs.push(n);
+    h+=`<div class="turn"><small>${label}</small>${av(g,n)}<div class="who2">Le toca a ${esc(mem(g,n).name)}<span>${other.length&&!other.includes(n)?'Nadie paga dos cosas el mismo día si hay gente de sobra':'Es quien menos ha pagado para lo que viene'}</span></div>
       <div class="acts"><button class="pri" data-rp="${type}|${n}">Ha pagado ${esc(mem(g,n).name)}</button><select class="in" data-ro="${type}" aria-label="Ha pagado otra persona"><option value="">Pagó otro…</option>${pr.filter(id=>id!==n).map(id=>`<option value="${id}">${esc(mem(g,id).name)}</option>`).join('')}</select></div></div>`});
   $('#turns').innerHTML=h;
-  const s1=rstats(g,'ronda'),s2=rstats(g,'cafe');
-  $('#rtab').innerHTML=`<tr><th>Persona</th><th>Rondas</th><th>Cafés</th><th>Días</th><th>Balance</th></tr>`+g.members.map(m=>{const a=s1[m.id],b=s2[m.id],bal=(a.paid-a.fair)+(b.paid-b.fair),d=Math.max(a.days,b.days);
-    return`<tr><td>${esc(m.name)}</td><td>${a.paid}</td><td>${b.paid}</td><td>${d}</td><td style="color:${bal>0.25?'var(--pos)':bal<-0.25?'var(--neg)':'var(--mut)'}">${bal>0.25?'+':''}${bal.toFixed(1).replace('.',',')}</td></tr>`}).join('');
+  const ST=TYPES.map(t=>rstats(g,t[0]));
+  $('#rtab').innerHTML=`<tr><th>Persona</th>${TYPES.map(t=>`<th>${t[2]}</th>`).join('')}<th>Días</th><th>Balance</th></tr>`+g.members.map(m=>{const xs=ST.map(st=>st[m.id]),bal=xs.reduce((a,x)=>a+x.paid-x.fair,0),d=new Set((g.rounds||[]).filter(r=>r.present.includes(m.id)).map(r=>r.date)).size;
+    return`<tr><td>${esc(m.name)}</td>${xs.map(x=>`<td>${x.paid}</td>`).join('')}<td>${d}</td><td style="color:${bal>0.25?'var(--pos)':bal<-0.25?'var(--neg)':'var(--mut)'}">${bal>0.25?'+':''}${bal.toFixed(1).replace('.',',')}</td></tr>`}).join('');
   const days=[...new Set(g.rounds.map(r=>r.date))].sort().reverse().slice(0,10);
   $('#rhist').innerHTML=days.map(d=>{const rs=g.rounds.filter(r=>r.date===d);
-    return`<div class="row" style="cursor:default"><span class="t"><b>${new Date(d+'T12:00').toLocaleDateString('es-ES',{weekday:'long',day:'numeric',month:'short'})}</b><span class="s">${rs.map(r=>`${r.type==='ronda'?'Ronda':'Cafés'}: ${esc(mem(g,r.who).name)}`).join(' · ')} · ${rs[0].present.length} personas</span></span></div>`}).join('')||'<div class="empty">Aún no hay turnos apuntados.</div>';
+    return`<div class="row" style="cursor:default"><span class="t"><b>${new Date(d+'T12:00').toLocaleDateString('es-ES',{weekday:'long',day:'numeric',month:'short'})}</b><span class="s">${rs.map(r=>`${TNAME[r.type]||r.type}: ${esc(mem(g,r.who).name)}`).join(' · ')} · ${rs[0].present.length} personas</span></span></div>`}).join('')||'<div class="empty">Aún no hay turnos apuntados.</div>';
   $('#rtab').insertAdjacentHTML('afterend','');
 }
 $('#v-rondas').addEventListener('click',e=>{const g=G();
@@ -413,7 +413,7 @@ const HELP=[
  ['Apunta cada gasto','Pulsa «+ Añadir gasto». Escanea el ticket o escribe el importe, elige el concepto con un toque, quién pagó y entre quiénes se reparte.'],
  ['Elige cómo repartir','«A partes iguales» divide entre los marcados (los céntimos sueltos se reparten solos). «Importes exactos» te deja poner la parte de cada uno; la app avisa si falta o sobra.'],
  ['Mira los saldos','En «Saldos», verde es quien ha puesto de más y le deben; rojo es quien debe. Saldo = lo que pagó menos lo que le toca.'],
- ['Rondas del día','Para la ronda antes de comer y los cafés, que van aparte. Marca quién ha venido hoy y la app dice a quién le toca cada cosa; quien paga la ronda no paga los cafés ese día. Es justo con la asistencia: quien viene más días paga más veces. «Balance» en positivo es quien ha pagado de más.'],
+ ['Rondas del día','Para la ronda antes de comer, los cafés y las copas, que van aparte. Marca quién ha venido hoy y la app dice a quién le toca cada cosa; si hay gente suficiente, nadie paga dos cosas el mismo día. Las copas solo se apuntan los días que las hay. Es justo con la asistencia: quien viene más días paga más veces. «Balance» en positivo es quien ha pagado de más.'],
  ['Liquida con los mínimos pagos','«Liquidar» calcula quién paga a quién con el menor número de transferencias. Cuando se haga un pago, pulsa «Hecho»: queda apuntado como reembolso y todo se recalcula.']];
 function helpSheet(){open(head('Cómo funciona')+HELP.map((h,i)=>`<div class="hs"><span class="n">${i+1}</span><h3>${h[0]}</h3><p>${h[1]}</p></div>`).join('')+`
   <div class="tip"><b>Escanear ticket</b>La foto se lee en tu propio móvil, no se envía a ningún sitio. La primera vez tarda un poco más porque descarga el lector. Revisa siempre el importe antes de guardar: un ticket arrugado o con poca luz puede leerse mal.</div>
